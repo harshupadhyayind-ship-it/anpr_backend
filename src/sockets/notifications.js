@@ -4,39 +4,49 @@
  */
 const { getIO } = require('./index');
 
-/**
- * Notify the admin room when any vendor is created.
- */
-const notifyVendorCreated = (vendorId, createdBy) => {
-  getIO().to('admin').emit('vendor:created', {
-    vendorId,
-    createdBy,
-    timestamp: new Date(),
-  });
+const emit = (room, event, payload) => {
+  try { getIO().to(room).emit(event, { ...payload, timestamp: new Date() }); } catch {}
 };
 
-/**
- * Notify the creating vendor AND admin when a user is created.
- */
+// ── Vendor / User ─────────────────────────────────────────────────────────────
+
+const notifyVendorCreated = (vendorId, createdBy) =>
+  emit('admin', 'vendor:created', { vendorId, createdBy });
+
 const notifyUserCreated = (userId, createdBy, creatorRole) => {
-  const io = getIO();
-
-  io.to('admin').emit('user:created', { userId, createdBy, creatorRole, timestamp: new Date() });
-
+  emit('admin', 'user:created', { userId, createdBy, creatorRole });
   if (creatorRole === 'vendor') {
-    io.to(`vendor:${createdBy}`).emit('user:created', {
-      userId,
-      createdBy,
-      timestamp: new Date(),
-    });
+    emit(`vendor:${createdBy}`, 'user:created', { userId, createdBy });
   }
 };
 
+const notifyUser = (userId, event, payload) =>
+  emit(`user:${userId}`, event, payload);
+
+// ── Visitors ──────────────────────────────────────────────────────────────────
+
 /**
- * Notify a specific user (e.g. account status change).
+ * Broadcast a new visitor to the admin room.
+ * Also push a notification to the inviting app user.
  */
-const notifyUser = (userId, event, payload) => {
-  getIO().to(`user:${userId}`).emit(event, { ...payload, timestamp: new Date() });
+const notifyVisitorNew = (visitor, invitedBy) => {
+  emit('admin', 'visitor:new', { visitor, invitedBy });
+  emit(`user:${invitedBy}`, 'visitor:new', { visitor });
 };
 
-module.exports = { notifyVendorCreated, notifyUserCreated, notifyUser };
+/**
+ * Broadcast a cancelled visitor to the admin room.
+ * Also inform the inviting app user.
+ */
+const notifyVisitorCancelled = (visitor, cancelledBy) => {
+  emit('admin', 'visitor:cancelled', { visitor, cancelledBy });
+  emit(`user:${cancelledBy}`, 'visitor:cancelled', { visitor });
+};
+
+module.exports = {
+  notifyVendorCreated,
+  notifyUserCreated,
+  notifyUser,
+  notifyVisitorNew,
+  notifyVisitorCancelled,
+};

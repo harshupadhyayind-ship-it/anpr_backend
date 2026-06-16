@@ -1,6 +1,6 @@
 const visitorsRepo = require('../repositories/visitors.repository')
 const notifRepo    = require('../repositories/notifications.repository')
-const { getIO }    = require('../sockets')
+const { notifyVisitorNew, notifyVisitorCancelled, notifyUser } = require('../sockets/notifications')
 
 const err = (msg, code) => Object.assign(new Error(msg), { statusCode: code })
 
@@ -19,17 +19,18 @@ const inviteVisitor = async (userId, d) => {
     durationMinutes:  d.durationMinutes || 0,
   })
 
+  // Push in-app notification to the inviting user
   const notif = await notifRepo.create({
     userId,
     title:   'Visitor Invited',
-    message: `${d.visitorName} has been invited. Tracking: ${visitor.tracking_number}`,
+    message: `${d.visitorName} has been invited. Tracking: ${visitor.trackingNumber}`,
     type:    'visitor_invited',
-    data:    { visitorId: visitor.id, trackingNumber: visitor.tracking_number },
+    data:    { visitorId: visitor._id, trackingNumber: visitor.trackingNumber },
   })
-  _push(userId, notif)
+  notifyUser(userId, 'notification:new', notif)
 
-  // Notify admin
-  try { getIO().to('admin').emit('visitor:new', { visitor, invitedBy: userId }) } catch {}
+  // Real-time broadcast → admin room + inviting user
+  notifyVisitorNew(visitor, userId)
 
   return visitor
 }
@@ -51,20 +52,17 @@ const getByTracking = async (trackingNumber) => {
 // ─── Cancel visitor ───────────────────────────────────────────────────────────
 
 const cancelVisitor = async (userId, visitorId) => {
-  const { query } = require('../config/database')
-  const { rows } = await query(
-    `SELECT * FROM visitors WHERE id = $1 AND invited_by = $2`, [visitorId, userId]
-  )
-  if (!rows[0]) throw err('Visitor not found', 404)
-  if (rows[0].status === 'checked_in') throw err('Cannot cancel a visitor who has already checked in', 400)
+  const Visitor = require('../models/visitors.model')
+  const visitor = await Visitor.findOne({ _id: visitorId, invitedBy: userId }).lean()
+  if (!visitor) throw err('Visitor not found', 404)
+  if (visitor.status === 'checked_in') throw err('Cannot cancel a visitor who has already checked in', 400)
 
-  return visitorsRepo.updateStatus(visitorId, 'cancelled')
-}
+  const updated = await visitorsRepo.updateStatus(visitorId, 'cancelled')
 
-// ─── Helper ───────────────────────────────────────────────────────────────────
+  // Real-time broadcast → admin room + cancelling user
+  notifyVisitorCancelled(updated, userId)
 
-const _push = (userId, notif) => {
-  try { getIO().to(`user:${userId}`).emit('notification:new', notif) } catch {}
+  return updated
 }
 
 module.exports = { inviteVisitor, getVisitors, getByTracking, cancelVisitor }
